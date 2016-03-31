@@ -120,8 +120,8 @@ virt.consts = require(7);
 virt.getChildKey = require(8);
 virt.getRootIdFromId = require(9);
 
-virt.isAncestorIdOf = require(10),
-    virt.traverseAncestors = require(11);
+virt.isAncestorIdOf = require(10);
+virt.traverseAncestors = require(11);
 virt.traverseDescendants = require(12);
 virt.traverseTwoPhase = require(13);
 
@@ -2091,11 +2091,10 @@ NodePrototype.__updateComponent = function(
     }
 
     transaction.queue.enqueue(function onUpdate() {
-        component.__mountState = componentState.UPDATED;
+        component.__mountState = componentState.MOUNTED;
         if (component.componentDidUpdate) {
             component.componentDidUpdate(prevProps, prevChildren, prevState, prevContext);
         }
-        component.__mountState = componentState.MOUNTED;
     });
 };
 
@@ -3177,7 +3176,6 @@ module.exports = keyMirror([
     "MOUNTING",
     "MOUNTED",
     "UPDATING",
-    "UPDATED",
     "UNMOUNTING",
     "UNMOUNTED"
 ]);
@@ -4521,7 +4519,7 @@ InputPrototype.__onChange = function(e, fromInput) {
     var props = this.props,
         type = props.type,
         isRadio = type === "radio";
-
+    
     if (isRadio || type === "checkbox") {
         e.preventDefault();
         props.checked = !props.checked;
@@ -4556,7 +4554,7 @@ function Input_uncheckSiblings(input, siblings) {
             (props = sibling.props) &&
             props.type === "radio"
         ) {
-            props.checked = !props.checked;
+            props.checked = false;
             sibling.__setChecked(props.checked);
         }
     }
@@ -4571,19 +4569,28 @@ InputPrototype.__setChecked = function(checked, callback) {
 
 InputPrototype.__getValue = function(callback) {
     this.emitMessage("virt.dom.Input.getValue", {
-        id: this.getInternalId()
+        id: this.getInternalId(),
+        type: this.props.type
     }, callback);
 };
 
 InputPrototype.__setValue = function(value, focus, callback) {
+    var type = this.props.type;
+    
     if (isFunction(focus)) {
         callback = focus;
         focus = void(0);
     }
-    this.emitMessage("virt.dom.Input.setValue", {
-        id: this.getInternalId(),
-        value: value
-    }, callback);
+    
+    if (type === "radio" || type === "checkbox") {
+        this.__setChecked(value, callback);
+    } else {
+        this.emitMessage("virt.dom.Input.setValue", {
+            id: this.getInternalId(),
+            focus: focus,
+            value: value
+        }, callback);
+    }
 };
 
 InputPrototype.__getSelection = function(callback) {
@@ -4756,11 +4763,9 @@ TextAreaPrototype.__setValue = function(value, focus, callback) {
         callback = focus;
         focus = void(0);
     }
-    if (focus === true) {
-        throw "";
-    }
     this.emitMessage("virt.dom.TextArea.setValue", {
         id: this.getInternalId(),
+        focus: focus,
         value: value
     }, callback);
 };
@@ -4911,12 +4916,31 @@ nodeHandlers["virt.getViewProperty"] = function(data, callback) {
         callback(new Error("getViewDimensions: No DOM node found with id " + data.id));
     }
 };
-
 nodeHandlers["virt.setViewProperty"] = function(data, callback) {
     var node = findDOMNode(data.id);
 
     if (node) {
         node[data.property] = data.value;
+        callback(undefined);
+    } else {
+        callback(new Error("getViewDimensions: No DOM node found with id " + data.id));
+    }
+};
+
+nodeHandlers["virt.getViewStyleProperty"] = function(data, callback) {
+    var node = findDOMNode(data.id);
+
+    if (node) {
+        callback(undefined, node.style[data.property]);
+    } else {
+        callback(new Error("getViewDimensions: No DOM node found with id " + data.id));
+    }
+};
+nodeHandlers["virt.setViewStyleProperty"] = function(data, callback) {
+    var node = findDOMNode(data.id);
+
+    if (node) {
+        node.style[data.property] = data.value;
         callback(undefined);
     } else {
         callback(new Error("getViewDimensions: No DOM node found with id " + data.id));
@@ -5016,7 +5040,9 @@ inputHandlers["virt.dom.Input.setChecked"] = function(data, callback) {
     if (node) {
         if (data.checked) {
             node.setAttribute("checked", true);
+            node.checked = true;
         } else {
+            node.checked = false;
             node.removeAttribute("checked");
         }
         callback();
@@ -5416,7 +5442,11 @@ sharedInputHandlers.getValue = function(data, callback) {
     var node = findDOMNode(data.id);
 
     if (node) {
-        callback(undefined, node.value);
+        if (data.type === "radio" || data.type === "checkbox") {
+            callback(undefined, node.checked);
+        } else {
+            callback(undefined, node.value);
+        }
     } else {
         callback(new Error("getValue: No DOM node found with id " + data.id));
     }
@@ -5424,7 +5454,7 @@ sharedInputHandlers.getValue = function(data, callback) {
 
 sharedInputHandlers.setValue = function(data, callback) {
     var node = findDOMNode(data.id),
-        origValue, value, focus, caret;
+        origValue, value, focus, caret, end, origLength;
 
     if (node) {
         origValue = node.value;
@@ -5436,8 +5466,13 @@ sharedInputHandlers.setValue = function(data, callback) {
                 caret = domCaret.get(node);
             }
             node.value = value;
-            if (focus && caret.start !== origValue.length) {
-                domCaret.set(node, caret.start, caret.end);
+            if (focus) {
+                origLength = origValue.length;
+                end = caret.end;
+
+                if (end < origLength) {
+                    domCaret.set(node, caret.start, caret.end);
+                }
             }
         }
         callback();
@@ -7903,6 +7938,7 @@ SyntheticEventPrototype.destructor = function() {
     this.returnValue = null;
     this.isTrusted = null;
     this.isPersistent = null;
+    this.value = null;
 };
 
 SyntheticEventPrototype.destroy = function() {
@@ -8800,7 +8836,7 @@ function getKeyCode(nativeEvent) {
 function getWhich(nativeEvent) {
     var type = nativeEvent.type;
 
-    return type === "keypress" ? getEventCharCode(event) : (
+    return type === "keypress" ? getEventCharCode(nativeEvent) : (
         type === "keydown" || type === "keyup" ? nativeEvent.keyCode : 0
     );
 }
