@@ -1,6 +1,6 @@
-var virt = require("virt"),
-    propTypes = require("prop_types"),
-    emptyFunction = require("empty_function");
+var virt = require("@nathanfaucett/virt"),
+    propTypes = require("@nathanfaucett/prop_types"),
+    emptyFunction = require("@nathanfaucett/empty_function");
 
 
 var ClickAwayPrototype;
